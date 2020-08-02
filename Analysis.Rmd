@@ -56,28 +56,22 @@ data.working <- data.working %>%
          Age >= 36 ~ "Master",
          TRUE ~ "ERROR"))) %>%
   mutate(Federation = as.factor(Federation))
+
+
+# testing this worked
+data.working %>%
+  group_by(WeightClassKg_WORKING,Sex) %>%
+  summarise(min = min(BodyweightKg),
+            max = max(BodyweightKg))
+
 ```
 
-
-# scatter plots by gender
 ```{r}
-loop_vars <- c('Sex', 'AgeBucket', 'Federation')
-for (each in loop_vars){
-  gg <- ggplot(data.working) +
-    geom_point(aes_string(x = "BodyweightKg", y = "TotalKg", color = each, group = each), alpha = .5)+
-    facet_wrap(paste("~",each))
-  
-  print(gg)
-}
+# BOX COX TRANSFORMATIONS BY WEIGHT CLASS
 ```
 
-# GAM #1
-```{r}
-gam1 <- gam(TotalKg ~ te(TotalKg, BodyweightKg) + s(AgeBucket, bs = "re") + s(Federation, bs = "re"),
-            data = data.working[data.working$Sex == "M",],
-            method = "REML")
 
-data.working[data.working$Sex == "M","gam1"] <- predict(gam1, type = "response")
-```
+
+
 
 
