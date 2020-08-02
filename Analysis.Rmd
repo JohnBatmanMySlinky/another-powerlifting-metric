@@ -1,0 +1,83 @@
+---
+title: "open-powerlifting-GAM"
+author: "John Myslinski"
+output: html_notebook
+---
+# setup
+```{r setup, results = 'hide', warning=FALSE}
+rm(list = ls())
+
+library(dplyr)
+library(ggplot2)
+library(mgcv)
+```
+
+# download data
+```{r download, results = 'hide', warning=FALSE}
+if (file.exists("openpowerlifting-2020-06-20/openpowerlifting-2020-06-20.csv")){
+  data.working <- read.csv("openpowerlifting-2020-06-20/openpowerlifting-2020-06-20.csv")
+} else {
+  download.file("https://github.com/sstangl/openpowerlifting-static/raw/gh-pages/openpowerlifting-latest.zip",
+              "openpowerlifting-latest.zip")
+  unzip("openpowerlifting-latest.zip")
+  
+  data.working <- read.csv("openpowerlifting-2020-06-20/openpowerlifting-2020-06-20.csv")
+}
+
+
+
+
+```
+
+# Glimpse & summary data
+```{r glimpse}
+glimpse(data.working)
+summary(data.working)
+```
+
+# filter data
+```{r}
+data.working <- data.working %>%
+  filter(Event == "SBD",
+         Equipment == "Raw",
+         !is.na(Age),
+         !is.na(BodyweightKg),
+         !is.na(TotalKg),
+         ParentFederation == "IPF")
+```
+
+# creating features
+```{r}
+data.working <- data.working %>%
+  mutate(AgeBucket = as.factor(case_when(
+         Age <= 19 ~ "Younger",
+         Age >= 20 & Age <= 23 ~ "Junior",
+         Age >= 24 & Age <= 35 ~ "Open",
+         Age >= 36 ~ "Master",
+         TRUE ~ "ERROR"))) %>%
+  mutate(Federation = as.factor(Federation))
+```
+
+
+# scatter plots by gender
+```{r}
+loop_vars <- c('Sex', 'AgeBucket', 'Federation')
+for (each in loop_vars){
+  gg <- ggplot(data.working) +
+    geom_point(aes_string(x = "BodyweightKg", y = "TotalKg", color = each, group = each), alpha = .5)+
+    facet_wrap(paste("~",each))
+  
+  print(gg)
+}
+```
+
+# GAM #1
+```{r}
+gam1 <- gam(TotalKg ~ te(TotalKg, BodyweightKg) + s(AgeBucket, bs = "re") + s(Federation, bs = "re"),
+            data = data.working[data.working$Sex == "M",],
+            method = "REML")
+
+data.working[data.working$Sex == "M","gam1"] <- predict(gam1, type = "response")
+```
+
+
