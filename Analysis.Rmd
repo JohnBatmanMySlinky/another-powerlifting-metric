@@ -7,9 +7,10 @@ output: html_notebook
 ```{r setup, results = 'hide', warning=FALSE}
 rm(list = ls())
 
-library(dplyr)
+library(tidyverse)
 library(ggplot2)
-library(mgcv)
+library(car)
+library(scam)
 ```
 
 # download data
@@ -23,20 +24,15 @@ if (file.exists("openpowerlifting-2020-06-20/openpowerlifting-2020-06-20.csv")){
   
   data.working <- read.csv("openpowerlifting-2020-06-20/openpowerlifting-2020-06-20.csv")
 }
-
-
-
-
 ```
 
-# Glimpse & summary data
+# summarize data
 ```{r glimpse}
-glimpse(data.working)
 summary(data.working)
 ```
 
 # filter data
-```{r}
+```{r filter}
 data.working <- data.working %>%
   filter(Event == "SBD",
          Equipment == "Raw",
@@ -47,7 +43,7 @@ data.working <- data.working %>%
 ```
 
 # creating features
-```{r}
+```{r features}
 data.working <- data.working %>%
   mutate(AgeBucket = as.factor(case_when(
          Age <= 19 ~ "Younger",
@@ -58,19 +54,130 @@ data.working <- data.working %>%
   mutate(Federation = as.factor(Federation))
 
 
-# testing this worked
-data.working %>%
-  group_by(WeightClassKg_WORKING,Sex) %>%
-  summarise(min = min(BodyweightKg),
-            max = max(BodyweightKg))
+# Adding weightclass
+data.working$WeightclassKg_Calc <- "error"
 
+data.working[data.working$Sex == "M","WeightclassKg_Calc"] <- data.working %>% 
+  filter(Sex == "M") %>%
+  transmute(WeightclassKg_Calc = as.character(cut(BodyweightKg,
+                                  c(0,53,59,66,74,83,93,105,120,9999))))
+
+data.working[data.working$Sex == "F","WeightclassKg_Calc"] <- data.working %>% 
+  filter(Sex == "F") %>%
+  transmute(WeightclassKg_Calc = as.character(cut(BodyweightKg,
+                                  c(0,43,47,52,57,63,72,84,9999))))
+
+data.working$WeightclassKg_Calc <- as.factor(data.working$WeightclassKg_Calc)
 ```
 
 ```{r}
-# BOX COX TRANSFORMATIONS BY WEIGHT CLASS
+weightclasses <- unique(data.working$WeightclassKg_Calc)
 ```
 
 
+# intra-weightclass scam
+## monotone increasing concave --> bs = "micv"
+```{r}
+for (each in weightclasses){
+  
+  df_tmp <- data.working %>%
+    filter(WeightclassKg_Calc == each) %>%
+    select(TotalKg, BodyweightKg)
+  
+  scam_tmp <- scam(data = df_tmp,
+                   TotalKg ~ s(BodyweightKg, bs = "mpi"))
+  
+  df_tmp$scam_predict <- predict(scam_tmp)
+  
+  print(ggplot(df_tmp) +
+    geom_point(aes(x = BodyweightKg, y = TotalKg)) +
+    geom_line(aes(x = BodyweightKg, y = scam_predict), color = "blue", size = 2) +
+    ggtitle(paste(each, ": Raw with GAM")))
+  
+  data.working[data.working$WeightclassKg_Calc == each, "TotalKg_scam"] <- data.working[data.working$WeightclassKg_Calc == each, "TotalKg"] / df_tmp$scam_predict
+  
+  print(ggplot(data.working %>% filter(WeightclassKg_Calc == each)) +
+    geom_point(aes(x = BodyweightKg, y = TotalKg_scam)) +
+    ggtitle(paste(each, ": Transformed")))
+}
+
+
+ggplot(data.working %>% filter(Sex == "M")) +
+  geom_point(aes(x = BodyweightKg, y = TotalKg_scam))
+
+ggplot(data.working %>% filter(Sex == "F")) +
+  geom_point(aes(x = BodyweightKg, y = TotalKg_scam))
+```
+
+# box-cox
+```{r box-cox-transform}
+box_cox_df <- matrix(ncol = 2,
+                     nrow = length(unique(data.working$WeightclassKg_Calc)))
+
+# dataframe of optimal lambdas
+for (x in 1:length(weightclasses)){
+  tmp <- data.working %>% filter(WeightclassKg_Calc == weightclasses[x])
+  box_cox_df[x,1] <- as.character(weightclasses[x])
+  box_cox_df[x,2] <- powerTransform(tmp$TotalKg_scam)$lambda
+}
+
+box_cox_df <- as.data.frame(box_cox_df)
+colnames(box_cox_df) <- c("WeightclassKg", "lambda")
+box_cox_df$WeightclassKg <- as.character(box_cox_df$WeightclassKg)
+box_cox_df$lambda <- as.numeric(box_cox_df$lambda)
+box_cox_df
+
+# applying box-cox w/ said optimal lambda
+data.working$SCORE <- 0
+for (each in weightclasses){
+  x = data.working[data.working$WeightclassKg_Calc == each,"TotalKg_scam"]
+  data.working[data.working$WeightclassKg_Calc == each,"SCORE"] <- bcPower(x,box_cox_df[box_cox_df$WeightclassKg == each,"lambda"])
+}
+
+
+# divide by mean
+for (each in weightclasses){
+  data.working[data.working$WeightclassKg_Calc == each,"SCORE"] <- scale(data.working[data.working$WeightclassKg_Calc == each,"SCORE"])
+}
+```
+
+
+# visualize box cox results
+```{r viz-box-cox}
+# individual weight classes
+for (each in weightclasses){
+  tmp <- data.working %>%
+    filter(WeightclassKg_Calc == each) %>%
+    select(SCORE)
+  
+  gg <- ggplot(tmp) +
+    geom_density(aes(x = SCORE)) +
+    ggtitle(each)
+  
+  print(gg)
+}
+
+# male / female
+for (each in c("M", "F")){
+  print(ggplot(data.working %>% filter(Sex == each)) +
+    geom_point((aes(x = BodyweightKg, y = SCORE))) +
+    ggtitle(paste("Gender =",each)))
+}
+
+```
+# Top Men & Women
+```{r}
+data.working %>%
+  arrange(desc(SCORE)) %>%
+  filter(Sex == "M") %>%
+  filter(row_number() <11)
+
+
+data.working %>%
+  arrange(desc(SCORE)) %>%
+  filter(Sex == "F") %>%
+  filter(row_number() <11)
+```
 
 
 
